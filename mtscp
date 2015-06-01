@@ -5,20 +5,21 @@ MINSIZE=0
 THREADS=4
 BLOCK_SIZE=$((1024*4))
 
-pids=""
-fds=""
+#pids of all our dd processes
+pids=()
+#files that will get the status output from dd
+fds=()
+#fifo pipes tied to ssh sessions
+ssh_pipes=()
 start_time=0
 mypid=$$
 echo myy pid: $mypid
 
 function finish {
-	# killall ssh
-	# killall dd
-	# for i in $(seq 0 $((THREADS-1))); do
-	# 	rm ${fds[$i]}
-	# done
-	wait
-	echo "Done"
+	pkill -P $$
+	rm ${ssh_pipes[@]}
+	rm ${fds[@]}
+	echo Done
 }
 trap finish EXIT
 
@@ -49,6 +50,7 @@ size=$(du -b $1 | awk '{print $1}')
 echo file size: $size
 echo block size: $BLOCK_SIZE
 ssh root@s.samsurl.com "rm $2 -f; dd if=/dev/zero of=$2 bs=$size count=1"
+start_time=$(date +%s)
 if(($size > $MINSIZE)); then
 	#calculate how many BLOCK_SIZE blocks there are in the file. 
 	blocks=$((size/BLOCK_SIZE))
@@ -62,14 +64,20 @@ if(($size > $MINSIZE)); then
 		fds[$i]=`mktemp`
 		#make a fifo buffer to hold output from dd.
 		# mkfifo ${fds[i]}
-		dd if="$1" bs=$BLOCK_SIZE skip=$((chunk_size*i)) count=$chunk_size > >(ssh root@s.samsurl.com "dd of="$2" bs=$BLOCK_SIZE seek=$((chunk_size*i)) count=$chunk_size " ) 2> ${fds[i]} &
+		fifo=$(mktemp --dry-run)
+		ssh_pipes+=($fifo)
+		mkfifo $fifo
+		echo fifo: $fifo
+		ssh root@s.samsurl.com "dd of="$2" bs=$BLOCK_SIZE seek=$((chunk_size*i)) count=$chunk_size " <$fifo 2> /dev/null&
+		dd if="$1" bs=$BLOCK_SIZE skip=$((chunk_size*i)) count=$chunk_size >$fifo 2>${fds[i]} &
 		#get the PID of the process just spawned
 		pids[$i]=$!
 		# echo "got pid ${pids[i]}"
 	done
 	
-	start_xfer=$(get_transferred)
-	start_time=$(date +%s)
+	#start_xfer=$(get_transferred)
+	start_xfer=0
+	
 	until(( $(ps --ppid $mypid --no-headers | wc -l ) == 1 )) ; do
 		now=$(date +%s)
 		elapsed=$((now - start_time))
@@ -80,6 +88,9 @@ if(($size > $MINSIZE)); then
 		sleep 1
 	done
 else
-	scp $1 $2
+	# scp $1 $2
+	echo 'asdf'
 fi
 
+echo "waiting on processes to finish"
+wait
