@@ -1,7 +1,7 @@
 #!/usr/bin/python
 
 from threading import Thread
-from multiprocessing import Process
+# from multiprocessing import Process, Queue
 import Queue
 import paramiko
 import signal
@@ -15,11 +15,12 @@ from IPython.external.ssh.tunnel import paramiko
 from guidata.dataset import datatypes
 from hgext.mq import queue
 from hgext.keyword import files
+# from Crypto.SelfTest.Random.test__UserFriendlyRNG import multiprocessing
 
 # Constants
-CHUNK_SIZE =     1024*8
+CHUNK_SIZE =     1024*128
 THREADS =        8
-host = '192.168.10.112'
+host = '127.0.0.1'
 username = 'sam'
 password = ''
 
@@ -31,7 +32,6 @@ signal.signal(signal.SIGINT, signal_handler)
 class LocalFile:
     def __init__(self):
         print "constructor"
-        self.mutex = Lock();
         self.file_size = None
         self.file = None
     def open(self, filename, file_size=None):
@@ -117,14 +117,14 @@ class Chunk:
         self.chunk_size=0
         self.offset=0
 
-class Chunk_Generator(Process):
+class Chunk_Generator(Thread):
     def __init__(self, path, dest): 
-        Process.__init__(self)
+        Thread.__init__(self)
         self.files=[]
         self.folders=[]
         self.path = path
         self.dest = dest
-        self.queue = Queue.Queue(THREADS+1)
+        self.queue = Queue.Queue()
     def run(self):
         for root, subFolders, files in os.walk(self.path):
             for file in files:
@@ -157,7 +157,6 @@ class Chunk_Generator(Process):
                         self.queue.put(chunk)
                         elapsed += time.time()
                         print "chunk read speed: " + `chunk.size/elapsed`
-                        
                 except:
                     print "fucked up"
                     pass
@@ -177,9 +176,9 @@ class File_Thread:
                 
         
    
-class SSH_Thread(Process):
+class SSH_Thread(Thread):
     def __init__(self, mode, queue, host, username, password):
-        Process.__init__(self)
+        Thread.__init__(self)
         print "SSH_Thread constructor"
         self.mode = mode
         self.file_size = None
@@ -231,11 +230,12 @@ class SSH_Thread(Process):
                 cmd = "dd of='%s' count=1 bs=%d seek=%d conv=notrunc" % (chunk.dest, CHUNK_SIZE, chunk.offset)
             else:
                 cmd = "dd of='%s' bs=%d conv=notrunc seek=%d" % (chunk.dest, CHUNK_SIZE, chunk.offset) 
-#             print cmd
+            print cmd
             stdin, stdout, stderr = self.ssh.exec_command(cmd)
 #             stdin.channel.send(chunk.data)
-            stdin.write(chunk.data)
-            stdin.flush()
+            for i in range(0, chunk.size/(64*1024)):   
+                stdin.write(chunk.data[(1024*64*i):(1024*64*(1+i))])
+                stdin.flush()
             stdin.channel.shutdown_write()
             
 #             lines = stderr.readlines()
@@ -247,17 +247,17 @@ class SSH_Thread(Process):
             ssh_md5 = stdout.readline().strip()
 #             print "md5: '" + ssh_md5 + "' == '" + chunk.md5 + "' " +  `(chunk.md5 == ssh_md5)` + " " + `len(chunk.data)`
     
-queue = Queue.Queue(THREADS+1)
+# queue = Queue(THREADS+1)
 if __name__ == "__main__":
     cg = Chunk_Generator("/home/sam/Downloads/Dropbox", "/mnt/main/media/trash")
-    cg.queue = queue  
+#     cg.queue = queue  
     cg.start()
-    # while(cg.queue.get() or cg.is_alive()):   
-    #     pass 
-    # sys.exit()
+#     while(cg.queue.get() or cg.is_alive()):   
+#         pass 
+#     sys.exit()
     sht = []
     for i in range(0,THREADS):
-        sht.append(SSH_Thread('w', cg.queue, 'freenas.local', 'root', ''))
+        sht.append(SSH_Thread('w', cg.queue, '127.0.0.1', 'sam', ''))
         sht[i].start()
     for i in range(0,THREADS):
         sht[i].stop()
