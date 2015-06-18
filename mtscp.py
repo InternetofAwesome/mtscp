@@ -20,8 +20,8 @@ from mutex import mutex
 # from Crypto.SelfTest.Random.test__UserFriendlyRNG import multiprocessing
 
 # Constants
-CHUNK_SIZE =     1024*32
-THREADS =        1
+CHUNK_SIZE =     1024*64
+THREADS =        8
 host = '127.0.0.1'
 username = 'sam'
 password = ''
@@ -87,21 +87,26 @@ class SSH_Thread(Thread):
         Thread.__init__(self)
         print "SSH_Thread constructor"
         self.mode = mode
+        self.host = host
+        self.username = username
+        self.password = password
         self.file_size = None
         self.file = None
-        self.ssh = paramiko.SSHClient()
-        self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self.ssh.connect(host, username=username, password=password)
         self.size=0
         self.time=0
         self.running = False
         self.kill = False
+        self.connect()
         stdin, stdout, stderr = self.ssh.exec_command("which md5")
 #         print len(stdout.readline())
         if(len(stdout.readlines())):
             self.md5_cmd = "md5"
         else:
             self.md5_cmd = "md5sum"
+    def connect(self):
+        self.ssh = paramiko.SSHClient()
+        self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        self.ssh.connect(host, username=username, password=password)
     def run(self):
         while(1):
             SSH_Thread.mutex.acquire()
@@ -117,35 +122,24 @@ class SSH_Thread(Thread):
         self.kill = True
     def chunk_write(self, chunk):
         ssh_md5=""
+        
         while(chunk.md5 != ssh_md5):
-            print `chunk.offset`
-#             if(chunk.size == CHUNK_SIZE):
-            cmd = "dd of='%s' count=1 bs=%d seek=%d conv=notrunc" % (chunk.dest, CHUNK_SIZE*2, chunk.offset)
-#             else:
-#                 cmd = "dd of='%s' bs=%d conv=notrunc seek=%d" % (chunk.dest, CHUNK_SIZE, chunk.offset) 
-#             print cmd
-            stdin, stdout, stderr = self.ssh.exec_command(cmd)
-#             stdin.channel.send(chunk.data)
-            stdin.write(chunk.data)
-            stdin.flush()
-            stdout.readlines()
-            stderr.readlines()
-            stdin.write(chunk.data)
-            stdin.flush()
-            stdout.readlines()
-            stderr.readlines()
-#             stdin.write(chunk.data[0:1024*64])
-#             stdin.flush()
-            stdin.channel.shutdown_write()
-            
-            lines = stderr.readlines()
-#             print lines
-#             Calculate the md5 of the file chunk that was written
-            cmd="dd if='%s' count=1 bs=%d skip=%d | %s" % (chunk.dest, CHUNK_SIZE, chunk.offset, self.md5_cmd) 
-#             print cmd
-            stdin, stdout, stderr = self.ssh.exec_command(cmd)
-            ssh_md5 = stdout.readline()[0:32].strip()
-#             print "md5: '" + ssh_md5 + "' == '" + chunk.md5 + "' " +  `(chunk.md5 == ssh_md5)` + " " + `len(chunk.data)`
+            try:
+                print `chunk.offset`
+    #             if(chunk.size == CHUNK_SIZE):
+                cmd = "dd of='%s' count=1 bs=%d seek=%d conv=notrunc && dd if='%s' count=1 bs=%d skip=%d | md5sum" % (chunk.dest, CHUNK_SIZE, chunk.offset, chunk.dest, CHUNK_SIZE, chunk.offset)
+    #             else:
+    #                 cmd = "dd of='%s' bs=%d conv=notrunc seek=%d" % (chunk.dest, CHUNK_SIZE, chunk.offset) 
+    #             print cmd
+                stdin, stdout, stderr = self.ssh.exec_command(cmd)
+    #             stdin.channel.send(chunk.data)
+                stdin.write(chunk.data)
+                stdin.channel.shutdown_write()
+                ssh_md5 = stdout.readline()[0:32]
+    #             pridnt "md5: '" + ssh_md5 + "' == '" + chunk.md5 + "' " +  `(chunk.md5 == ssh_md5)` + " " + `len(chunk.data)`
+            except:
+                print "some bad shit happened."
+                self.connect()
    
 print "dickbath"
 path = "/home/sam/Downloads/Dropbox"
