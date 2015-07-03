@@ -12,16 +12,42 @@ import md5
 import math
 from urlparse import urlparse
 import paramiko
-from optparse import OptionParser
+import argparse
+import re
+import  itertools
 
 # Constants
-CHUNK_SIZE =     1024*1024
+CHUNK_SIZE =     1024*1024*10
 THREADS =       8
 
 def signal_handler(signal, frame):
     print('You pressed Ctrl+C!')
     sys.exit(0)
 signal.signal(signal.SIGINT, signal_handler)
+
+def scpfile(str):
+    print str
+    scpfile_regex = '^((([^:/?#@]+)@)?([^@/?#]*)?:)?(~?([^~#]*))$'
+    try:
+        match = re.match(scpfile_regex, str)
+        print match
+        obj = {}
+        obj['path'] = match.group(5)
+        obj['username'] = match.group(3)
+        obj['host'] = match.group(4)
+        return obj
+    except:
+        msg = "%s does not appear to be a valid path" % str
+        raise argparse.ArgumentTypeError(msg)
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument('-r', action='store_true', help="Recursively copy entire directories.")
+parser.add_argument('src', metavar='[[user@]host1:]path', type=scpfile, nargs='+', help='')
+args = parser.parse_args()
+
+destination = args.src.pop()
+source = args.src
 
 class Chunk:
     def __init__(self):
@@ -108,18 +134,19 @@ class LocalDir:
         self.folders = []
         self.semaphore = Semaphore(THREADS)
         self.current_file = None
-        for root, subFolders, files in os.walk(src):
-            print "%s, %s, %s" % (root, subFolders, files)
-            dest_dir = os.path.join(dest, os.path.relpath(root, src))
-            #only keep the very end folder, cause were going to create dirs with parents.
-            if(not len(subFolders)):
-                self.folders.append("'" + dest_dir + "'")
-                print "dest: %s" % dest_dir
-            for file in files:
-                print(file)
-                filename = os.path.join(src, file) 
-                dest_file = os.path.join(dest_dir, file)
-                self.files.append(LocalFile(filename, dest_file)) 
+        for srcdir in src:
+            for root, subFolders, files in os.walk(srcdir['path']):
+                print "%s, %s, %s" % (root, subFolders, files)
+                dest_dir = os.path.join(dest, os.path.relpath(root, srcdir['path']))
+                #only keep the very end folder, cause were going to create dirs with parents.
+                if(not len(subFolders)):
+                    self.folders.append("'" + dest_dir + "'")
+                    print "dest: %s" % dest_dir
+                for file in files:
+                    print(file)
+                    filename = os.path.join(srcdir['path'], file) 
+                    dest_file = os.path.join(dest_dir, file)
+                    self.files.append(LocalFile(filename, dest_file)) 
         #note that this totally ignores maximum command line length (which is huge)
         self.folders = " ".join(self.folders)
         print "Folders: %s" % self.folders
@@ -156,7 +183,7 @@ class SSH_Thread(Thread):
     def connect(self):
         self.ssh = paramiko.SSHClient()
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self.ssh.connect(host, username=username, password=password)
+        self.ssh.connect(self.host, username=self.username, password=self.password)
     def run(self):
         print "starting thread " + current_thread().getName()
         self.running = True
@@ -233,14 +260,16 @@ class SSH_Thread(Thread):
                 print "some bad shit happened."
                 self.connect()
 
-path = "/home/sam/Documents/mtscp/src"
-destination = "/home/sam/Documents/mtscp/dest"
+# path = "/home/sam/Documents/mtscp/src"
+# destination = "/home/sam/Documents/mtscp/dest"
+print source
+file_list = LocalDir(source, destination)
 
-file_list = LocalDir(path, destination)
+print destination
     
 sht = []
 for i in range(0,THREADS):
-    sht.append(SSH_Thread('localhost', 'sam', '', file_list))
+    sht.append(SSH_Thread(destination['host'], destination['username'], '', file_list))
     if(i==0 ):
         print "running mkdir on %d" % i
         sht[0].mkdir(file_list.folders)
