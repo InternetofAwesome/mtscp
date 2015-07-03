@@ -135,9 +135,10 @@ class LocalDir:
         self.semaphore = Semaphore(THREADS)
         self.current_file = None
         for srcdir in src:
+            print "walking %s" % srcdir['path']
             for root, subFolders, files in os.walk(srcdir['path']):
                 print "%s, %s, %s" % (root, subFolders, files)
-                dest_dir = os.path.join(dest, os.path.relpath(root, srcdir['path']))
+                dest_dir = os.path.join(dest['path'], os.path.relpath(root, srcdir['path']))
                 #only keep the very end folder, cause were going to create dirs with parents.
                 if(not len(subFolders)):
                     self.folders.append("'" + dest_dir + "'")
@@ -263,6 +264,7 @@ class SSH_Thread(Thread):
 # path = "/home/sam/Documents/mtscp/src"
 # destination = "/home/sam/Documents/mtscp/dest"
 print source
+print destination
 file_list = LocalDir(source, destination)
 
 print destination
@@ -270,8 +272,8 @@ print destination
 sht = []
 for i in range(0,THREADS):
     sht.append(SSH_Thread(destination['host'], destination['username'], '', file_list))
-    if(i==0 ):
-        print "running mkdir on %d" % i
+    if(i==0):
+        print "running mkdir on %s" % file_list.folders
         sht[0].mkdir(file_list.folders)
     sht[i].start()
 for t in sht:
