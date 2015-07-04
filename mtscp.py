@@ -206,17 +206,20 @@ class SSH_Thread(Thread):
         self.size=0 
         self.time=0
         self.file_list = files
+        self.ssh = None
     def connect(self):
+        if(self.ssh is not None):
+            return
         self.ssh = paramiko.SSHClient()
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.ssh.connect(self.host, username=self.username, password=self.password)
-    def run(self):
-        self.connect()
         stdin, stdout, stderr = self.ssh.exec_command("which md5")
         if(len(stdout.readlines())):
             self.md5_cmd = "md5"
         else:
             self.md5_cmd = "md5sum"
+    def run(self):
+        self.connect()
         if(not running):
             return
         print "     " + current_thread().getName()
@@ -279,6 +282,7 @@ class SSH_Thread(Thread):
     def stop(self):
         self.kill = True
     def mkdir(self, folder):
+        self.connect()
         cmd = "mkdir -p %s" % folder
         print cmd
         stdin, stdout, stderr = self.ssh.exec_command(cmd)
