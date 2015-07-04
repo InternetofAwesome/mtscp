@@ -17,37 +17,63 @@ import re
 import  itertools
 
 # Constants
-CHUNK_SIZE =     1024*1024*10
-THREADS =       8
+CHUNK_SIZE =        1024*1024*5
+THREADS =           8
+running =           True
+verbose =           False
 
+def debug(str):
+    if(verbose):
+        print str
+
+def quit_program():
+    global running
+    running = False
+    for t in sht:
+        try:
+            t.stop()
+        except:
+            pass
+    for t in sht:
+        try:
+            t.join()
+        except:
+            pass
+    sys.exit(-1)
+    
 def signal_handler(signal, frame):
     print('You pressed Ctrl+C!')
+    quit_program()
     sys.exit(0)
 signal.signal(signal.SIGINT, signal_handler)
 
 def scpfile(str):
-    print str
     scpfile_regex = '^((([^:/?#@]+)@)?([^@/?#]*)?:)?(~?([^~#]*))$'
     try:
         match = re.match(scpfile_regex, str)
-        print match
         obj = {}
         obj['path'] = match.group(5)
         obj['username'] = match.group(3)
         obj['host'] = match.group(4)
-        return obj
     except:
         msg = "%s does not appear to be a valid path" % str
         raise argparse.ArgumentTypeError(msg)
+    if(obj['host'] and re.match('~.*', obj['path'])):
+        msg = "expansion of '~' in '%s' currently unsupported" % obj['path']
+        raise argparse.ArgumentTypeError(msg)
+    return obj
 
 parser = argparse.ArgumentParser()
 
 parser.add_argument('-r', action='store_true', help="Recursively copy entire directories.")
 parser.add_argument('src', metavar='[[user@]host1:]path', type=scpfile, nargs='+', help='')
+parser.add_argument('-v', '--verbose', action='store_true', help="Enable verbose loggging")
 args = parser.parse_args()
 
 destination = args.src.pop()
 source = args.src
+if(args.verbose):
+    verbose = True
 
 class Chunk:
     def __init__(self):
@@ -135,19 +161,25 @@ class LocalDir:
         self.semaphore = Semaphore(THREADS)
         self.current_file = None
         for srcdir in src:
-            print "walking %s" % srcdir['path']
-            for root, subFolders, files in os.walk(srcdir['path']):
-                print "%s, %s, %s" % (root, subFolders, files)
-                dest_dir = os.path.join(dest['path'], os.path.relpath(root, srcdir['path']))
-                #only keep the very end folder, cause were going to create dirs with parents.
-                if(not len(subFolders)):
-                    self.folders.append("'" + dest_dir + "'")
-                    print "dest: %s" % dest_dir
-                for file in files:
-                    print(file)
-                    filename = os.path.join(srcdir['path'], file) 
-                    dest_file = os.path.join(dest_dir, file)
-                    self.files.append(LocalFile(filename, dest_file)) 
+            print "walking %s" % srcdir
+            if(os.path.isdir(srcdir['path'])): #it's a direectory, walk it.
+                for root, subFolders, files in os.walk(srcdir['path']):
+                    print "files: %s, %s, %s" % (root, subFolders, files)
+                    dest_dir = os.path.join(dest['path'], os.path.relpath(root, srcdir['path']))
+                    #only keep the very end folder, cause were going to create dirs with parents.
+                    if(not len(subFolders)):
+                        self.folders.append("'" + dest_dir + "'")
+                        print "dest: %s" % dest_dir
+                    for file in files:
+                        print(file)
+                        filename = os.path.join(srcdir['path'], file) 
+                        dest_file = os.path.join(dest_dir, file)
+                        self.files.append(LocalFile(filename, dest_file))
+            else: #its just a regular file
+                print os.path.split(srcdir['path'])[1]
+                dest_file = os.path.join(dest['path'], os.path.split(srcdir['path'])[1])
+                print "copying %s to %s" % (srcdir['path'], dest_file)
+                self.files.append(LocalFile(srcdir['path'], dest_file))
         #note that this totally ignores maximum command line length (which is huge)
         self.folders = " ".join(self.folders)
         print "Folders: %s" % self.folders
@@ -159,6 +191,7 @@ class LocalDir:
                 self.current_file = self.files.pop()
             else:
                 raise StopIteration()
+        print "copying file %s" % self.current_file['path']
         return self.current_file
 class SSH_Thread(Thread):
     mutex = Lock()
@@ -172,8 +205,6 @@ class SSH_Thread(Thread):
         self.password = password
         self.size=0 
         self.time=0
-        self.running = False
-        self.kill = False
         self.file_list = files
         self.connect()
         stdin, stdout, stderr = self.ssh.exec_command("which md5")
@@ -186,35 +217,46 @@ class SSH_Thread(Thread):
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.ssh.connect(self.host, username=self.username, password=self.password)
     def run(self):
-        print "starting thread " + current_thread().getName()
+        if(not running):
+            return
+        print "     " + current_thread().getName()
         self.running = True
         sftp = self.ssh.open_sftp()
         if(sftp is None):
             print "sftp is null"
         #iterate throught my file list
-        for file in self.file_list:
+        for file in self.file_list.files:
+            if(not running):
+                return
             scpfile = None
             file.mutex.acquire()
-            print "looking at file %s" % file.dest
             #try to get info about the file
             try:
                 stat = sftp.stat(file.dest)
             except IOError:
                 stat = None
             #if the file doesn't exist, or is the wrong size, create it.
-            if(stat is None or stat.st_size != file.file_size):
-                if(stat is None):
-                    print file.dest
-                    scpfile = sftp.file(file.dest, 'w+')
+            try:
+                if(stat is None or stat.st_size != file.file_size):
+                    if(stat is None):
+                        scpfile = sftp.file(file.dest, 'w+')
+                    else:
+                        scpfile = sftp.file(file.dest, 'r+')
+                    scpfile.seek(file.file_size-1)
+                    scpfile.write('\0')
                 else:
                     scpfile = sftp.file(file.dest, 'r+')
-                scpfile.seek(file.file_size-1)
-                scpfile.write('\0')
-            else:
-                scpfile = sftp.file(file.dest, 'r+')
+            except:
+                print "ERROR: Could not open remote file."
+                file.mutex.release()
+                quit_program()
+                return
             file.mutex.release()
             #write each chunk to the file.
             for chunk in file:
+                if(not running):
+                    scpfile.close()
+                    return
                 print "writing chunk %d of %s" % (chunk.offset, file.dest)
                 #get the md5 of the remote chunk, just in case we have already transferred it.
                 cmd = "dd if=%s bs=%d skip=%d count=1 | %s" %(file.dest, CHUNK_SIZE, chunk.offset, self.md5_cmd)
@@ -222,6 +264,9 @@ class SSH_Thread(Thread):
                 md5 = stdout.readline()[0:32]
                 #if we haven't transferred it, do it until the md5 matches.
                 while(md5 != chunk.md5):
+                    if(running):
+                        scpfile.close()
+                        return
                     print "trying chunk %d in %s" % (chunk.offset, current_thread().getName())
                     scpfile.seek(chunk.offset*CHUNK_SIZE)
                     scpfile.write(chunk.data)
@@ -232,8 +277,6 @@ class SSH_Thread(Thread):
             scpfile.close();
             print "leaving thread " + current_thread().getName()
     def stop(self):
-        self.running = False
-    def kill(self):
         self.kill = True
     def mkdir(self, folder):
         cmd = "mkdir -p %s" % folder
@@ -263,21 +306,17 @@ class SSH_Thread(Thread):
 
 # path = "/home/sam/Documents/mtscp/src"
 # destination = "/home/sam/Documents/mtscp/dest"
-print source
-print destination
 file_list = LocalDir(source, destination)
-
-print destination
     
 sht = []
 for i in range(0,THREADS):
-    sht.append(SSH_Thread(destination['host'], destination['username'], '', file_list))
-    if(i==0):
-        print "running mkdir on %s" % file_list.folders
-        sht[0].mkdir(file_list.folders)
-    sht[i].start()
+    if(running):
+        sht.append(SSH_Thread(destination['host'], destination['username'], '', file_list))
+        if(i==0):
+            debug("running mkdir on %s" % file_list.folders)
+            sht[0].mkdir(file_list.folders)
+        sht[i].start()
 for t in sht:
-    t.stop()
     t.join()
 print "all threads jioned"
 sys.exit()
