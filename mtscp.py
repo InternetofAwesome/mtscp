@@ -239,9 +239,9 @@ class SSH_Thread(Thread):
             try:
                 if(stat is None or stat.st_size != file.file_size):
                     if(stat is None):
-                        scpfile = sftp.file(file.dest, 'w+')
+                        scpfile = sftp.file(file.dest, 'w')
                     else:
-                        scpfile = sftp.file(file.dest, 'r+')
+                        scpfile = sftp.file(file.dest, 'w')
                     scpfile.seek(file.file_size-1)
                     scpfile.write('\0')
                 else:
@@ -264,7 +264,7 @@ class SSH_Thread(Thread):
                 md5 = stdout.readline()[0:32]
                 #if we haven't transferred it, do it until the md5 matches.
                 while(md5 != chunk.md5):
-                    if(running):
+                    if(not running):
                         scpfile.close()
                         return
                     print "trying chunk %d in %s" % (chunk.offset, current_thread().getName())
